@@ -1,4 +1,3 @@
-
 import os
 
 import pandas as pd
@@ -8,7 +7,9 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 
-# CONFIGURAÇÃO DO DASHBOARD
+# ============================================================
+# CONFIGURACAO DO DASHBOARD
+# ============================================================
 
 st.set_page_config(
     page_title="Estação Meteorológica Inteligente",
@@ -16,41 +17,44 @@ st.set_page_config(
     layout="wide",
 )
 
-# Atualização automática da tela a cada 10 segundos
+# Atualiza a pagina a cada 10 segundos
 st_autorefresh(
     interval=10_000,
     limit=None,
     key="atualizacao_automatica",
 )
 
-# Endereço da API
+# Endereco da API. Configure API_URL nos Secrets do Streamlit.
 try:
     API_URL = st.secrets["API_URL"]
 except Exception:
     API_URL = os.getenv(
         "API_URL",
-        "http://127.0.0.1:8000/publico/medicoes",
+        "https://estacao-meteorologica-api-u4df.onrender.com/publico/medicoes",
     )
 
-# Localização aproximada da estação
 LOCAL_ESTACAO = "Água Branca, São Paulo - SP"
 LAT_ESTACAO = -23.512
 LON_ESTACAO = -46.702
 
 st.title("🌦️ Estação Meteorológica Inteligente")
-st.caption(
-    f"Monitoramento ambiental urbano | {LOCAL_ESTACAO}"
-)
-st.caption("🔄 O painel atualiza automaticamente a cada 10 segundos.")
+st.caption(f"Monitoramento ambiental urbano | {LOCAL_ESTACAO}")
+st.caption("🔄 O painel consulta a API automaticamente a cada 10 segundos.")
+st.caption(f"Fonte dos dados: {API_URL}")
 
 
-# BUSCAR MEDIÇÕES NA API
+# ============================================================
+# CONSULTA DA API
+# ============================================================
 
 @st.cache_data(ttl=5, show_spinner=False)
-def buscar_medicoes(url):
-    resposta = requests.get(url, timeout=10)
+def buscar_medicoes(url, _versao=1):
+    resposta = requests.get(
+        url,
+        timeout=25,
+        headers={"Cache-Control": "no-cache"},
+    )
     resposta.raise_for_status()
-
     dados = resposta.json()
 
     if isinstance(dados, dict):
@@ -62,8 +66,6 @@ def buscar_medicoes(url):
 
     return pd.DataFrame(registros)
 
-
-# CONFIGURAÇÃO DOS ALERTAS
 
 st.sidebar.header("⚙️ Configurações dos alertas")
 
@@ -108,20 +110,21 @@ if st.sidebar.button("🔄 Atualizar dados agora"):
     buscar_medicoes.clear()
     st.rerun()
 
-# CARREGAR OS DADOS
+
+# ============================================================
+# CARREGAR DADOS E MOSTRAR ERROS
+# ============================================================
 
 try:
     df = buscar_medicoes(API_URL)
-
 except requests.RequestException as erro:
     st.error("🚨 Não foi possível acessar a API.")
     st.write(
-        "Verifique se a FastAPI está funcionando e se o endereço "
-        "configurado em API_URL está correto."
+        "Verifique se a API do Render está disponível e se o valor "
+        "API_URL nos Secrets do Streamlit está correto."
     )
     st.caption(f"Detalhe técnico: {erro}")
     st.stop()
-
 except Exception as erro:
     st.error("Não foi possível processar os dados recebidos.")
     st.caption(f"Detalhe técnico: {erro}")
@@ -134,7 +137,34 @@ if df.empty:
     st.stop()
 
 
-# TRATAMENTO DOS DADOS
+# ============================================================
+# NORMALIZAR NOMES DAS COLUNAS
+# A API/Neon usa nomes como data_hora, temperatura, pressao_hpa.
+# O painel usa nomes amigaveis padronizados abaixo.
+# ============================================================
+
+df.columns = [str(col).strip() for col in df.columns]
+
+renomear = {
+    "data_hora": "DataHora",
+    "timestamp": "DataHora",
+    "created_at": "DataHora",
+    "temperatura": "Temperatura",
+    "umidade": "Umidade",
+    "pressao_hpa": "Pressao_hPa",
+    "pressao": "Pressao_hPa",
+    "luminosidade": "Luminosidade",
+    "mq2_adc": "MQ2_ADC",
+    "chuva_mm": "Chuva_mm",
+}
+
+# Aceita tanto nomes em minusculas quanto os nomes ja usados no painel.
+colunas_existentes = {
+    str(col).lower(): col for col in df.columns
+}
+for origem, destino in renomear.items():
+    if origem in colunas_existentes and destino not in df.columns:
+        df = df.rename(columns={colunas_existentes[origem]: destino})
 
 colunas_numericas = [
     "Temperatura",
@@ -147,10 +177,7 @@ colunas_numericas = [
 
 for coluna in colunas_numericas:
     if coluna in df.columns:
-        df[coluna] = pd.to_numeric(
-            df[coluna],
-            errors="coerce",
-        )
+        df[coluna] = pd.to_numeric(df[coluna], errors="coerce")
 
 if "DataHora" in df.columns:
     df["DataHora"] = pd.to_datetime(
@@ -158,18 +185,22 @@ if "DataHora" in df.columns:
         errors="coerce",
         utc=True,
     )
-
     df = df.dropna(subset=["DataHora"])
     df = df.sort_values("DataHora").reset_index(drop=True)
 
 if df.empty:
-    st.warning("Não existem medições com data e hora válidas.")
+    st.warning(
+        "A API retornou registros, mas não foi possível reconhecer uma "
+        "data/hora válida. Verifique se o campo data_hora existe na tabela."
+    )
     st.stop()
 
 ultima = df.iloc[-1]
 
 
-# STATUS DA ESTAÇÃO
+# ============================================================
+# STATUS DA ESTACAO
+# ============================================================
 
 st.subheader("📡 Status da estação")
 
@@ -177,88 +208,61 @@ idade_minutos = None
 
 if "DataHora" in df.columns and pd.notna(ultima["DataHora"]):
     agora_utc = pd.Timestamp.now(tz="UTC")
-
-    idade_minutos = (
-        agora_utc - ultima["DataHora"]
-    ).total_seconds() / 60
-
-    idade_minutos = max(0, idade_minutos)
-
-    data_local = ultima["DataHora"].tz_convert(
-        "America/Sao_Paulo"
+    idade_minutos = max(
+        0,
+        (agora_utc - ultima["DataHora"]).total_seconds() / 60,
     )
 
+    data_local = ultima["DataHora"].tz_convert("America/Sao_Paulo")
     c1, c2, c3 = st.columns(3)
 
     c1.metric(
         "Última medição",
         data_local.strftime("%d/%m/%Y %H:%M:%S"),
     )
-
-    c2.metric(
-        "Tempo desde a medição",
-        f"{idade_minutos:.1f} min",
-    )
+    c2.metric("Tempo desde a medição", f"{idade_minutos:.1f} min")
 
     if idade_minutos > tempo_desatualizado:
         c3.error("⚠️ Dados desatualizados")
     else:
         c3.success("✅ Dados recentes")
-
 else:
-    st.warning(
-        "Não foi possível identificar a data da última medição."
-    )
+    st.warning("Não foi possível identificar a data da última medição.")
 
 
-# ALERTAS AUTOMÁTICOS
+# ============================================================
+# ALERTAS
+# ============================================================
 
 st.subheader("🚨 Alertas ambientais")
-
 alertas = []
 
-if (
-    idade_minutos is not None
-    and idade_minutos > tempo_desatualizado
-):
+if idade_minutos is not None and idade_minutos > tempo_desatualizado:
     alertas.append(
-        f"Dados desatualizados: última medição há "
-        f"{idade_minutos:.1f} minutos."
+        f"Dados desatualizados: última medição há {idade_minutos:.1f} minutos."
     )
 
-if (
-    "Temperatura" in df.columns
-    and pd.notna(ultima.get("Temperatura"))
-):
+if "Temperatura" in df.columns and pd.notna(ultima.get("Temperatura")):
     temperatura = float(ultima["Temperatura"])
-
     if temperatura > limite_temperatura:
         alertas.append(
             f"Temperatura elevada: {temperatura:.1f} °C. "
             f"Limite: {limite_temperatura:.1f} °C."
         )
 
-if (
-    "Umidade" in df.columns
-    and pd.notna(ultima.get("Umidade"))
-):
+if "Umidade" in df.columns and pd.notna(ultima.get("Umidade")):
     umidade = float(ultima["Umidade"])
-
     if umidade < limite_umidade:
         alertas.append(
             f"Umidade baixa: {umidade:.1f}%. "
             f"Limite: {limite_umidade:.1f}%."
         )
 
-if (
-    "MQ2_ADC" in df.columns
-    and pd.notna(ultima.get("MQ2_ADC"))
-):
-    mq2 = float(ultima["MQ2_ADC"])
-
-    if mq2 > limite_mq2:
+if "MQ2_ADC" in df.columns and pd.notna(ultima.get("MQ2_ADC")):
+    valor_mq2 = float(ultima["MQ2_ADC"])
+    if valor_mq2 > limite_mq2:
         alertas.append(
-            f"Leitura elevada do MQ-2: {mq2:.0f} ADC. "
+            f"Leitura elevada do MQ-2: {valor_mq2:.0f} ADC. "
             f"Limite: {limite_mq2}."
         )
 
@@ -274,63 +278,40 @@ st.caption(
 )
 
 
+# ============================================================
 # INDICADORES PRINCIPAIS
+# ============================================================
 
 st.subheader("📊 Indicadores atuais")
 
 
 def valor_formatado(coluna, formato, unidade=""):
-    if (
-        coluna not in df.columns
-        or pd.isna(ultima.get(coluna))
-    ):
+    if coluna not in df.columns or pd.isna(ultima.get(coluna)):
         return "Sem dados"
-
     return f"{float(ultima[coluna]):{formato}}{unidade}"
 
 
 m1, m2, m3 = st.columns(3)
 m4, m5, m6 = st.columns(3)
 
-m1.metric(
-    "🌡️ Temperatura",
-    valor_formatado("Temperatura", ".1f", " °C"),
-)
-
-m2.metric(
-    "💧 Umidade",
-    valor_formatado("Umidade", ".1f", "%"),
-)
-
-m3.metric(
-    "🌬️ Pressão atmosférica",
-    valor_formatado("Pressao_hPa", ".2f", " hPa"),
-)
-
-m4.metric(
-    "🌧️ Chuva acumulada",
-    valor_formatado("Chuva_mm", ".2f", " mm"),
-)
-
-m5.metric(
-    "☀️ Luminosidade (ADC)",
-    valor_formatado("Luminosidade", ".0f"),
-)
-
-m6.metric(
-    "🫧 Leitura do MQ-2 (ADC)",
-    valor_formatado("MQ2_ADC", ".0f"),
-)
+m1.metric("🌡️ Temperatura", valor_formatado("Temperatura", ".1f", " °C"))
+m2.metric("💧 Umidade", valor_formatado("Umidade", ".1f", "%"))
+m3.metric("🌬️ Pressão atmosférica", valor_formatado("Pressao_hPa", ".2f", " hPa"))
+m4.metric("🌧️ Chuva acumulada", valor_formatado("Chuva_mm", ".2f", " mm"))
+m5.metric("☀️ Luminosidade (ADC)", valor_formatado("Luminosidade", ".0f"))
+m6.metric("🫧 Leitura do MQ-2 (ADC)", valor_formatado("MQ2_ADC", ".0f"))
 
 
-# GRÁFICOS INTERATIVOS
+# ============================================================
+# GRAFICOS INTERATIVOS
+# ============================================================
 
 st.subheader("📈 Histórico das medições")
 
 graficos = [
     ("Temperatura", "Temperatura", "°C"),
     ("Umidade", "Umidade", "%"),
-    ("Pressao_hPa", "Pressão atmosférica", "hPa"),
+    ("Pressao_HPa", "Pressão atmosférica", "hPa"),
     ("Luminosidade", "Luminosidade", "ADC"),
     ("MQ2_ADC", "Leitura do MQ-2", "ADC"),
     ("Chuva_mm", "Chuva acumulada", "mm"),
@@ -344,19 +325,9 @@ if "DataHora" in df.columns:
     }
 
     if opcoes:
-        selecao = st.selectbox(
-            "Escolha o indicador",
-            list(opcoes.keys()),
-        )
-
+        selecao = st.selectbox("Escolha o indicador", list(opcoes.keys()))
         coluna = opcoes[selecao]
-
-        unidade = next(
-            item[2]
-            for item in graficos
-            if item[0] == coluna
-        )
-
+        unidade = next(item[2] for item in graficos if item[0] == coluna)
         grafico_df = df[["DataHora", coluna]].dropna()
 
         if not grafico_df.empty:
@@ -371,16 +342,11 @@ if "DataHora" in df.columns:
                     coluna: f"{selecao} ({unidade})",
                 },
             )
-
             fig.update_layout(
                 hovermode="x unified",
                 margin=dict(l=20, r=20, t=60, b=20),
             )
-
-            st.plotly_chart(
-                fig,
-                use_container_width=True,
-            )
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Não existem valores válidos para esse gráfico.")
     else:
@@ -389,10 +355,11 @@ else:
     st.info("Os gráficos precisam da coluna DataHora.")
 
 
-# MAPA E GEOLOCALIZAÇÃO
+# ============================================================
+# MAPA
+# ============================================================
 
 st.subheader("📍 Localização da estação")
-
 st.write(f"Local informado: **{LOCAL_ESTACAO}**")
 
 mapa = pd.DataFrame({
@@ -415,7 +382,9 @@ st.link_button(
 )
 
 
-# HISTÓRICO DAS MEDIÇÕES
+# ============================================================
+# HISTORICO DAS MEDICOES
+# ============================================================
 
 st.subheader("📋 Histórico das medições")
 
@@ -425,26 +394,25 @@ quantidade = st.selectbox(
     index=1,
 )
 
-historico = df.copy()
+df_historico = df.copy()
 
 if quantidade != "Todos":
-    historico = historico.tail(int(quantidade))
+    df_historico = df_historico.tail(int(quantidade))
 
-if "DataHora" in historico.columns:
-    historico["DataHora"] = (
-        historico["DataHora"]
+if "DataHora" in df_historico.columns:
+    df_historico["DataHora"] = (
+        df_historico["DataHora"]
         .dt.tz_convert("America/Sao_Paulo")
         .dt.strftime("%d/%m/%Y %H:%M:%S")
     )
 
 st.dataframe(
-    historico.sort_index(ascending=False),
+    df_historico.sort_index(ascending=False),
     use_container_width=True,
     hide_index=True,
 )
 
 st.caption(
     "Painel demonstrativo da estação meteorológica inteligente. "
-    "Os dados são consultados novamente conforme o intervalo "
-    "de atualização configurado."
+    "Os dados são consultados novamente conforme o intervalo de atualização."
 )
