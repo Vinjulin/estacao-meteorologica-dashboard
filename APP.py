@@ -7,9 +7,7 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 
-# ============================================================
-# CONFIGURACAO DO DASHBOARD
-# ============================================================
+# CONFIGURACAO DO DASHBOARD #
 
 st.set_page_config(
     page_title="Estação Meteorológica Inteligente",
@@ -17,14 +15,14 @@ st.set_page_config(
     layout="wide",
 )
 
-# Atualiza a pagina a cada 10 segundos
+# Atualiza a pagina a cada 10 segundos #
 st_autorefresh(
     interval=10_000,
     limit=None,
     key="atualizacao_automatica",
 )
 
-# Endereco da API. Configure API_URL nos Secrets do Streamlit.
+# Endereco da API #
 try:
     API_URL = st.secrets["API_URL"]
 except Exception:
@@ -43,9 +41,7 @@ st.caption("🔄 O painel consulta a API automaticamente a cada 10 segundos.")
 st.caption(f"Fonte dos dados: {API_URL}")
 
 
-# ============================================================
-# CONSULTA DA API
-# ============================================================
+# CONSULTA DA API #
 
 @st.cache_data(ttl=5, show_spinner=False)
 def buscar_medicoes(url, _versao=1):
@@ -111,9 +107,7 @@ if st.sidebar.button("🔄 Atualizar dados agora"):
     st.rerun()
 
 
-# ============================================================
-# CARREGAR DADOS E MOSTRAR ERROS
-# ============================================================
+# CARREGAR DADOS E MOSTRAR ERROS #
 
 try:
     df = buscar_medicoes(API_URL)
@@ -137,11 +131,7 @@ if df.empty:
     st.stop()
 
 
-# ============================================================
-# NORMALIZAR NOMES DAS COLUNAS
-# A API/Neon usa nomes como data_hora, temperatura, pressao_hpa.
-# O painel usa nomes amigaveis padronizados abaixo.
-# ============================================================
+# NOMES DAS COLUNAS #
 
 df.columns = [str(col).strip() for col in df.columns]
 
@@ -158,7 +148,7 @@ renomear = {
     "chuva_mm": "Chuva_mm",
 }
 
-# Aceita tanto nomes em minusculas quanto os nomes ja usados no painel.
+# NOMES #
 colunas_existentes = {
     str(col).lower(): col for col in df.columns
 }
@@ -198,9 +188,7 @@ if df.empty:
 ultima = df.iloc[-1]
 
 
-# ============================================================
-# STATUS DA ESTACAO
-# ============================================================
+# STATUS DA ESTACAO #
 
 st.subheader("📡 Status da estação")
 
@@ -230,9 +218,7 @@ else:
     st.warning("Não foi possível identificar a data da última medição.")
 
 
-# ============================================================
-# ALERTAS
-# ============================================================
+# ALERTAS #
 
 st.subheader("🚨 Alertas ambientais")
 alertas = []
@@ -278,9 +264,7 @@ st.caption(
 )
 
 
-# ============================================================
-# INDICADORES PRINCIPAIS
-# ============================================================
+# INDICADORES PRINCIPAIS #
 
 st.subheader("📊 Indicadores atuais")
 
@@ -302,9 +286,7 @@ m5.metric("☀️ Luminosidade (ADC)", valor_formatado("Luminosidade", ".0f"))
 m6.metric("🫧 Leitura do MQ-2 (ADC)", valor_formatado("MQ2_ADC", ".0f"))
 
 
-# ============================================================
-# GRAFICOS INTERATIVOS
-# ============================================================
+# GRAFICOS INTERATIVOS #
 
 st.subheader("📈 Histórico das medições")
 
@@ -355,9 +337,7 @@ else:
     st.info("Os gráficos precisam da coluna DataHora.")
 
 
-# ============================================================
-# MAPA
-# ============================================================
+# MAPA #
 
 st.subheader("📍 Localização da estação")
 st.write(f"Local informado: **{LOCAL_ESTACAO}**")
@@ -382,9 +362,7 @@ st.link_button(
 )
 
 
-# ============================================================
-# HISTORICO DAS MEDICOES
-# ============================================================
+# HISTORICO DAS MEDICOES #
 
 st.subheader("📋 Histórico das medições")
 
